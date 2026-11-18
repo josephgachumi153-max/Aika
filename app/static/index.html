@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aika</title>
+<style>
+:root{
+  --bg:#faf6ef; --card:#fff; --ink:#2a2118; --muted:#7a6e60; --line:#e8dfd0;
+  --brand:#b5471b; --brand-d:#8f3513; --ok:#2f7d4f; --warn:#b7791f; --bad:#b3261e;
+}
+@media (prefers-color-scheme: dark){
+  :root{--bg:#1b1713; --card:#262019; --ink:#f1e9dc; --muted:#a69a8a; --line:#3a3228; --brand:#e0693a; --brand-d:#c2552b;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+header{background:var(--brand);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px;position:sticky;top:0;z-index:5}
+header h1{margin:0;font-size:1.15rem}
+header button{background:rgba(255,255,255,.18);color:#fff;border:0;padding:6px 12px;border-radius:6px}
+nav{display:flex;gap:4px;overflow-x:auto;padding:8px 12px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:48px;z-index:4}
+nav button{flex:0 0 auto;background:none;border:0;color:var(--muted);padding:8px 12px;border-radius:999px;font-weight:600}
+nav button.on{background:var(--brand);color:#fff}
+main{max-width:900px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+h2{margin:4px 0 12px;font-size:1.15rem}
+h3{margin:0 0 6px;font-size:1rem}
+label{display:block;font-size:.85rem;color:var(--muted);margin:10px 0 4px}
+input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+textarea{min-height:60px}
+button{font:inherit;cursor:pointer}
+.btn{background:var(--brand);color:#fff;border:0;padding:10px 16px;border-radius:8px;font-weight:600}
+.btn:hover{background:var(--brand-d)}
+.btn.sec{background:none;color:var(--brand);border:1px solid var(--brand)}
+.btn.sm{padding:6px 10px;font-size:.85rem}
+.btn.ok{background:var(--ok)} .btn.bad{background:var(--bad)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.row>*{flex:1 1 140px}
+.between{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.muted{color:var(--muted);font-size:.9rem}
+.pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:.78rem;font-weight:700;background:var(--line)}
+.pill.pending{background:#fde9c8;color:#8a5a00}.pill.confirmed{background:#d8e8fb;color:#1c4f8f}
+.pill.delivered{background:#d5efdf;color:#1d6b3f}.pill.cancelled{background:#f6d6d3;color:#8d1f18}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.stat b{display:block;font-size:1.3rem}
+.prod{display:grid;grid-template-columns:1fr 92px;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.prod:last-child{border:0}
+table{width:100%;border-collapse:collapse;font-size:.92rem}
+th,td{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left}
+td.r,th.r{text-align:right}
+.err{color:var(--bad);font-size:.9rem;min-height:1.2em;margin-top:8px}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:999px;z-index:20}
+.total{font-size:1.2rem;font-weight:700}
+.hidden{display:none}
+.scroll{overflow-x:auto}
+</style>
+</head>
+<body>
+<header><h1>🐔 Aika</h1><div id="who"></div></header>
+<nav id="nav" class="hidden"></nav>
+<main id="app"></main>
+
+<script>
+const $ = (s, el=document) => el.querySelector(s);
+const kes = n => 'KES ' + Number(n||0).toLocaleString('en-KE', {minimumFractionDigits:0, maximumFractionDigits:2});
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let token = localStorage.getItem('aika_token'), user = null, view = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch('/api' + path, {
+    method: opts.method || 'GET',
+    headers: {'Content-Type':'application/json', ...(token ? {Authorization:'Bearer '+token} : {})},
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && token) { logout(true); throw new Error('Please log in again'); }
+  if (!res.ok) {
+    const d = data.detail;
+    throw new Error(Array.isArray(d) ? d.map(e => e.loc.slice(-1)[0] + ': ' + e.msg).join('; ') : (d || 'Something went wrong'));
+  }
+  return data;
+}
+function toast(msg) { const t = document.createElement('div'); t.className='toast'; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(), 2600); }
+const fd = form => Object.fromEntries(new FormData(form));
+
+// ------------------------------------------------------------- auth screens
+function authScreen(mode='login') {
+  $('#nav').classList.add('hidden'); $('#who').innerHTML = '';
+  $('#app').innerHTML = `
+  <div class="card" style="max-width:420px;margin:24px auto">
+    <h2>${mode==='login' ? 'Log in' : 'Register your hotel'}</h2>
+    <p class="muted">${mode==='login' ? 'Order vet-inspected chicken and track your deliveries.' : 'Create an account to start ordering.'}</p>
+    <form id="f">
+      ${mode==='register' ? `
+        <label>Business / hotel name</label><input name="business_name" required>
+        <label>Your name</label><input name="name" required>
+        <label>Phone</label><input name="phone" type="tel" required placeholder="07xx xxx xxx">
+        <label>Delivery address</label><input name="address" placeholder="e.g. Limuru town, off Tigoni road">` : ''}
+      <label>Email</label><input name="email" type="email" required>
+      <label>Password</label><input name="password" type="password" required minlength="6">
+      <div class="err" id="err"></div>
+      <button class="btn" style="width:100%;margin-top:8px">${mode==='login' ? 'Log in' : 'Create account'}</button>
+    </form>
+    <p class="muted" style="text-align:center"><a href="#" id="sw">${mode==='login' ? 'New hotel? Register' : 'Have an account? Log in'}</a></p>
+  </div>`;
+  $('#sw').onclick = e => { e.preventDefault(); authScreen(mode==='login' ? 'register' : 'login'); };
+  $('#f').onsubmit = async e => {
+    e.preventDefault();
+    try {
+      const r = await api(mode==='login' ? '/login' : '/register', {method:'POST', body: fd(e.target)});
+      token = r.token; localStorage.setItem('aika_token', token); user = r.user; boot();
+    } catch (err) { $('#err').textContent = err.message; }
+  };
+}
+function logout(silent) {
+  if (!silent && token) api('/logout', {method:'POST'}).catch(()=>{});
+  token = null; user = null; localStorage.removeItem('aika_token'); authScreen();
+}
+
+// ----------------------------------------------------------------- shell
+const TABS = {
+  hotel: [['order','Place order'], ['myorders','My orders']],
+  admin: [['dash','Dashboard'], ['orders','Orders'], ['products','Products'], ['farmers','Farmers'], ['purchases','Purchases'], ['customers','Customers']],
+};
+const VIEWS = {order: viewOrder, myorders: viewOrders, dash: viewDash, orders: viewOrders, products: viewProducts, farmers: viewFarmers, purchases: viewPurchases, customers: viewCustomers};
+
+async function boot() {
+  if (!token) return authScreen();
+  try { user = await api('/me'); } catch { return authScreen(); }
+  $('#who').innerHTML = `<span class="muted" style="color:#fff;margin-right:8px">${esc(user.business_name || user.name)}</span><button onclick="logout()">Log out</button>`;
+  const tabs = TABS[user.role];
+  $('#nav').classList.remove('hidden');
+  go(tabs[0][0]);
+}
+function go(v) {
+  view = v;
+  $('#nav').innerHTML = TABS[user.role].map(([k, l]) => `<button class="${k===v?'on':''}" onclick="go('${k}')">${l}</button>`).join('');
+  $('#app').innerHTML = '<p class="muted">Loading…</p>';
+  VIEWS[v]().catch(e => { $('#app').innerHTML = `<div class="card err">${esc(e.message)}</div>`; });
+}
+
+// ------------------------------------------------------------ hotel: order
+async function viewOrder() {
+  const products = await api('/products');
+  const tomorrow = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
+  $('#app').innerHTML = `
+  <form id="of">
+    <div class="card"><h2>What do you need?</h2>
+      ${products.map(p => `
+        <div class="prod">
+          <div><b>${esc(p.name)}</b><div class="muted">${esc(p.description)}</div><div>${kes(p.price)} / ${esc(p.unit)}</div></div>
+          <input type="number" min="0" step="0.5" inputmode="decimal" placeholder="0" data-id="${p.id}" data-price="${p.price}" aria-label="Quantity of ${esc(p.name)} in ${esc(p.unit)}">
+        </div>`).join('') || '<p class="muted">No products available right now.</p>'}
+    </div>
+    <div class="card"><h2>Delivery</h2>
+      <label>Delivery date</label><input type="date" name="delivery_date" min="${tomorrow}" value="${tomorrow}" required>
+      <label>Delivery address</label><input name="delivery_address" value="${esc(user.address)}" placeholder="Where should we deliver?">
+      <label>Notes (optional)</label><textarea name="notes" placeholder="Preferred time, cut sizes, special requests"></textarea>
+    </div>
+    <div class="card between"><div>Order total<div class="total" id="tot">KES 0</div></div>
+      <button class="btn" id="sub">Place order</button></div>
+    <div class="err" id="err"></div>
+  </form>`;
+  const recalc = () => {
+    let t = 0; document.querySelectorAll('[data-id]').forEach(i => t += (+i.value||0) * +i.dataset.price);
+    $('#tot').textContent = kes(t);
+  };
+  document.querySelectorAll('[data-id]').forEach(i => i.oninput = recalc);
+  $('#of').onsubmit = async e => {
+    e.preventDefault();
+    const items = [...document.querySelectorAll('[data-id]')].filter(i => +i.value > 0).map(i => ({product_id:+i.dataset.id, quantity:+i.value}));
+    if (!items.length) return $('#err').textContent = 'Enter a quantity for at least one item.';
+    const f = fd(e.target);
+    try {
+      await api('/orders', {method:'POST', body:{items, delivery_date:f.delivery_date, delivery_address:f.delivery_address, notes:f.notes}});
+      toast('Order placed! We will confirm shortly.'); go('myorders');
+    } catch (err) { $('#err').textContent = err.message; }
+  };
+}
+
+// ------------------------------------------- orders (hotel + admin share)
+let orderFilter = '';
+async function viewOrders() {
+  const admin = user.role === 'admin';
+  const orders = await api('/orders' + (admin && orderFilter ? '?status=' + orderFilter : ''));
+  $('#app').innerHTML = `
+  ${admin ? `<div class="card row"><select id="flt"><option value="">All orders</option>
+     ${['pending','confirmed','delivered','cancelled'].map(s => `<option ${s===orderFilter?'selected':''}>${s}</option>`).join('')}</select></div>` : ''}
+  ${orders.map(o => `
+    <div class="card">
+      <div class="between"><div><b>#${String(o.id).padStart(5,'0')}</b> ${admin ? '· ' + esc(o.business_name) : ''}
+        <div class="muted">Deliver ${esc(o.delivery_date)} · ${esc(o.delivery_address)}</div></div>
+        <span class="pill ${o.status}">${o.status}</span></div>
+      <table style="margin-top:8px">${o.items.map(i => `<tr><td>${esc(i.name)}</td><td class="r">${i.quantity} ${esc(i.unit)}</td><td class="r">${kes(i.quantity*i.unit_price)}</td></tr>`).join('')}</table>
+      ${o.notes ? `<div class="muted">Note: ${esc(o.notes)}</div>` : ''}
+      <div class="between" style="margin-top:8px"><div><b>${kes(o.total)}</b>
+        <span class="muted"> · paid ${kes(o.paid)} · balance ${kes(o.balance)}</span></div></div>
+      <div class="row" style="margin-top:8px;flex-wrap:wrap">
+        <a class="btn sec sm" style="text-align:center;text-decoration:none;flex:0 0 auto" target="_blank" href="/api/orders/${o.id}/invoice?token=${encodeURIComponent(token)}">Invoice</a>
+        ${admin ? adminOrderButtons(o) : (o.status==='pending' ? `<button class="btn bad sm" style="flex:0 0 auto" onclick="setStatus(${o.id},'cancelled')">Cancel order</button>` : '')}
+      </div>
+    </div>`).join('') || '<div class="card muted">No orders yet.</div>'}`;
+  if (admin) $('#flt').onchange = e => { orderFilter = e.target.value; go('orders'); };
+}
+function adminOrderButtons(o) {
+  const b = [];
+  if (o.status === 'pending') b.push(`<button class="btn ok sm" style="flex:0 0 auto" onclick="setStatus(${o.id},'confirmed')">Confirm</button>`);
+  if (o.status === 'confirmed') b.push(`<button class="btn ok sm" style="flex:0 0 auto" onclick="setStatus(${o.id},'delivered')">Mark delivered</button>`);
+  if (['pending','confirmed'].includes(o.status)) b.push(`<button class="btn bad sm" style="flex:0 0 auto" onclick="setStatus(${o.id},'cancelled')">Cancel</button>`);
+  if (o.status !== 'cancelled' && o.balance > 0) b.push(`<button class="btn sec sm" style="flex:0 0 auto" onclick="payDialog(${o.id}, ${o.balance})">Record payment</button>`);
+  return b.join('');
+}
+async function setStatus(id, status) {
+  if (status === 'cancelled' && !confirm('Cancel this order?')) return;
+  try { await api(`/orders/${id}/status`, {method:'POST', body:{status}}); toast('Updated'); go(view); } catch (e) { toast(e.message); }
+}
+function payDialog(id, balance) {
+  const amount = prompt(`Amount received (KES). Balance: ${balance}`, balance); if (!amount) return;
+  const method = (prompt('Method: mpesa, cash or bank', 'mpesa') || 'mpesa').toLowerCase();
+  const reference = method === 'cash' ? '' : (prompt('Reference / M-Pesa code (optional)') || '');
+  api(`/orders/${id}/payments`, {method:'POST', body:{amount:+amount, method, reference}})
+    .then(() => { toast('Payment recorded'); go(view); }).catch(e => toast(e.message));
+}
+
+// -------------------------------------------------------------- admin: dash
+async function viewDash() {
+  const s = await api('/reports/summary');
+  $('#app').innerHTML = `
+  <div class="grid">
+    <div class="stat"><span class="muted">Pending orders</span><b>${s.pending_orders}</b></div>
+    <div class="stat"><span class="muted">To deliver</span><b>${s.to_deliver}</b></div>
+    <div class="stat"><span class="muted">Sales this month</span><b>${kes(s.sales_this_month)}</b></div>
+    <div class="stat"><span class="muted">Bought this month</span><b>${kes(s.purchases_this_month)}</b></div>
+    <div class="stat"><span class="muted">Customers owe you</span><b>${kes(s.receivable)}</b></div>
+    <div class="stat"><span class="muted">You owe farmers</span><b>${kes(s.owed_to_farmers)}</b></div>
+  </div>
+  <div class="card" style="margin-top:12px"><h2>Stock on hand</h2>
+    <table>${s.stock.map(p => `<tr><td>${esc(p.name)}</td><td class="r" style="${p.stock<0?'color:var(--bad)':''}">${p.stock} ${esc(p.unit)}</td></tr>`).join('')}</table>
+    <p class="muted">Stock goes up when you record a purchase and down when an order is marked delivered.</p></div>
+  <div class="card"><h2>Top customers</h2>
+    <table>${s.top_customers.map(c => `<tr><td>${esc(c.business_name)}</td><td class="r">${c.orders} orders</td><td class="r">${kes(c.total)}</td></tr>`).join('') || '<tr><td class="muted">No sales yet</td></tr>'}</table></div>`;
+}
+
+// ----------------------------------------------------------- admin: products
+async function viewProducts() {
+  const ps = await api('/products');
+  $('#app').innerHTML = `
+  <div class="card"><h2>Add product</h2>
+    <form id="pf"><div class="row">
+      <div><label>Name</label><input name="name" required></div>
+      <div><label>Unit (kg, bird, tray)</label><input name="unit" value="kg" required></div>
+      <div><label>Price (KES)</label><input name="price" type="number" step="any" min="0" required></div></div>
+      <label>Description</label><input name="description">
+      <button class="btn" style="margin-top:10px">Add</button></form></div>
+  <div class="card"><h2>Prices & availability</h2><div class="scroll"><table>
+    <tr><th>Product</th><th>Unit</th><th class="r">Price</th><th>Active</th><th></th></tr>
+    ${ps.map(p => `<tr data-pid="${p.id}"><td><input value="${esc(p.name)}" data-k="name"></td>
+      <td style="width:70px"><input value="${esc(p.unit)}" data-k="unit"></td>
+      <td style="width:100px"><input type="number" step="any" value="${p.price}" data-k="price"></td>
+      <td><input type="checkbox" ${p.active?'checked':''} data-k="active" style="width:auto"></td>
+      <td><button class="btn sm" onclick="saveProduct(${p.id}, ${JSON.stringify(p.description||'').replace(/"/g,'&quot;')})">Save</button></td></tr>`).join('')}
+  </table></div></div>`;
+  $('#pf').onsubmit = async e => {
+    e.preventDefault(); const f = fd(e.target);
+    try { await api('/products', {method:'POST', body:{...f, price:+f.price}}); toast('Product added'); go('products'); } catch (err) { toast(err.message); }
+  };
+}
+async function saveProduct(id, description) {
+  const row = document.querySelector(`[data-pid="${id}"]`);
+  const g = k => row.querySelector(`[data-k="${k}"]`);
+  try {
+    await api('/products/' + id, {method:'PUT', body:{name:g('name').value, unit:g('unit').value, price:+g('price').value, active:g('active').checked, description}});
+    toast('Saved');
+  } catch (e) { toast(e.message); }
+}
+
+// ------------------------------------------------------------ admin: farmers
+async function viewFarmers() {
+  const fs = await api('/farmers');
+  $('#app').innerHTML = `
+  <div class="card"><h2>Add farmer</h2>
+    <form id="ff"><div class="row">
+      <div><label>Name</label><input name="name" required></div>
+      <div><label>Phone</label><input name="phone" type="tel"></div>
+      <div><label>Location</label><input name="location"></div></div>
+      <button class="btn" style="margin-top:10px">Add farmer</button></form></div>
+  <div class="card"><h2>Your farmers</h2><div class="scroll"><table>
+    <tr><th>Name</th><th>Phone</th><th>Location</th><th class="r">Total bought</th><th class="r">You owe</th></tr>
+    ${fs.map(f => `<tr><td>${esc(f.name)}</td><td>${esc(f.phone)}</td><td>${esc(f.location)}</td><td class="r">${kes(f.total_bought)}</td><td class="r">${kes(f.owed)}</td></tr>`).join('') || '<tr><td class="muted">No farmers yet</td></tr>'}
+  </table></div></div>`;
+  $('#ff').onsubmit = async e => {
+    e.preventDefault();
+    try { await api('/farmers', {method:'POST', body: fd(e.target)}); toast('Farmer added'); go('farmers'); } catch (err) { toast(err.message); }
+  };
+}
+
+// --------------------------------------------------------- admin: purchases
+async function viewPurchases() {
+  const [ps, fs, products] = await Promise.all([api('/purchases'), api('/farmers'), api('/products')]);
+  $('#app').innerHTML = `
+  <div class="card"><h2>Record a purchase from a farmer</h2>
+    ${fs.length ? `<form id="pf"><div class="row">
+      <div><label>Farmer</label><select name="farmer_id">${fs.map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join('')}</select></div>
+      <div><label>Product</label><select name="product_id">${products.map(p => `<option value="${p.id}">${esc(p.name)} (${esc(p.unit)})</option>`).join('')}</select></div></div>
+      <div class="row">
+      <div><label>Quantity</label><input name="quantity" type="number" step="any" min="0" required></div>
+      <div><label>Cost per unit (KES)</label><input name="unit_cost" type="number" step="any" min="0" required></div>
+      <div><label>Date</label><input name="purchase_date" type="date" value="${new Date().toISOString().slice(0,10)}"></div></div>
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="paid" style="width:auto"> Already paid the farmer</label>
+      <button class="btn" style="margin-top:10px">Save purchase</button></form>`
+      : '<p class="muted">Add a farmer first (Farmers tab).</p>'}</div>
+  <div class="card"><h2>Recent purchases</h2><div class="scroll"><table>
+    <tr><th>Date</th><th>Farmer</th><th>Item</th><th class="r">Qty</th><th class="r">Total</th><th></th></tr>
+    ${ps.map(p => `<tr><td>${esc(p.purchase_date)}</td><td>${esc(p.farmer_name)}</td><td>${esc(p.product_name)}</td>
+      <td class="r">${p.quantity} ${esc(p.unit)}</td><td class="r">${kes(p.total)}</td>
+      <td>${p.paid ? '<span class="pill delivered">paid</span>' : `<button class="btn sm" onclick="payFarmer(${p.id})">Mark paid</button>`}</td></tr>`).join('') || '<tr><td class="muted">No purchases yet</td></tr>'}
+  </table></div></div>`;
+  const f = $('#pf');
+  if (f) f.onsubmit = async e => {
+    e.preventDefault(); const d = fd(e.target);
+    try {
+      await api('/purchases', {method:'POST', body:{farmer_id:+d.farmer_id, product_id:+d.product_id, quantity:+d.quantity, unit_cost:+d.unit_cost, purchase_date:d.purchase_date, paid:!!d.paid}});
+      toast('Purchase saved, stock updated'); go('purchases');
+    } catch (err) { toast(err.message); }
+  };
+}
+async function payFarmer(id) { try { await api(`/purchases/${id}/pay`, {method:'POST'}); go('purchases'); } catch (e) { toast(e.message); } }
+
+// ------------------------------------------------------------ admin: customers
+async function viewCustomers() {
+  const cs = await api('/customers');
+  $('#app').innerHTML = `<div class="card"><h2>Hotel customers</h2><div class="scroll"><table>
+    <tr><th>Business</th><th>Contact</th><th class="r">Orders</th><th class="r">Ordered</th><th class="r">Balance</th></tr>
+    ${cs.map(c => `<tr><td>${esc(c.business_name)}</td><td>${esc(c.name)}<br><span class="muted">${esc(c.phone)}</span></td>
+      <td class="r">${c.orders}</td><td class="r">${kes(c.total_ordered)}</td><td class="r" style="${c.balance>0?'color:var(--bad)':''}">${kes(c.balance)}</td></tr>`).join('') || '<tr><td class="muted">No hotels registered yet</td></tr>'}
+  </table></div></div>`;
+}
+
+boot();
+</script>
+</body>
+</html>
